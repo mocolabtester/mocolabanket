@@ -1,15 +1,16 @@
 /**
- * Araştırma Veri Tablosu İçin Google Apps Script Kodu (Güncellenmiş)
+ * Araştırma Veri Tablosu İçin Google Apps Script Kodu (Gelişmiş & İki Sekmeli)
  * 
- * Bu dosyadaki kodu Google Sheets > Uzantılar > Apps Script alanına yapıştırabilirsiniz.
+ * Bu dosyadaki kodu Google Sheets > Uzantılar > Apps Script alanına yapıştırıp "Yeni Dağıtım" yapabilirsiniz.
  * 
- * İki ana işlevi vardır:
- * 1) doPost(e): Web sitelerinden gelen verileri tabloya otomatik kaydeder.
- * 2) createSurveyCodebookAndSheet(): Yeni, temiz bir "Yanitlar" sayfası ve tüm değişkenlerin
- *    kodlamasını açıklayan "Kod_Kitabi" (Codebook) sayfası oluşturur.
+ * İşlevler:
+ * 1) doPost(e): 
+ *    - Anket yanıtlarını "Yanitlar" sekmesine kaydeder.
+ *    - Yapay zeka / asistan ile yapılan sohbetlerin tam dökümünü (transkript) "Sohbet_Kayitlari" sekmesine kaydeder.
+ *    - Sekmeler yoksa otomatik olarak başlıklarıyla birlikte oluşturur.
+ * 2) createSurveyCodebookAndSheet(): Temiz "Yanitlar", "Sohbet_Kayitlari" ve "Kod_Kitabi" sayfalarını tek tıkla oluşturur.
  */
 
-// Tüm değişkenlerin güncel ve tam listesi
 var SURVEY_HEADERS = [
   "timestamp",
   "muhatap",
@@ -67,9 +68,21 @@ var SURVEY_HEADERS = [
   "demo_ai_believability"
 ];
 
+var CHAT_HEADERS = [
+  "timestamp",
+  "muhatap",
+  "siralama",
+  "ikilem",
+  "atanan_model",
+  "ilk_karar",
+  "son_karar",
+  "etki_derecesi",
+  "katilimci_ozeti",
+  "sohbet_transkripti"
+];
+
 function doPost(e) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Yanitlar") || ss.getActiveSheet();
   
   function jsonResponse(data) {
     return ContentService.createTextOutput(JSON.stringify(data))
@@ -82,20 +95,23 @@ function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
     
-    // Tablo başlık satırını al
+    // 1. ANA ANKET YANITLARINI KAYDET (Yanitlar Sekmesi)
+    var sheet = ss.getSheetByName("Yanitlar") || ss.getActiveSheet();
     var lastCol = sheet.getLastColumn();
     var headers = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
     
-    // Eğer tablo boşsa standart başlıkları oluştur
     if (headers.length === 0 || (headers.length === 1 && headers[0] === "")) {
       headers = SURVEY_HEADERS;
       sheet.appendRow(headers);
+      sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#e8f0fe");
     } else {
-      // Gelen veride tabloda olmayan bir anahtar varsa sona ekle
+      // Gelen veride SURVEY_HEADERS'a ait anahtarları kontrol et
       var headersUpdated = false;
       var incomingKeys = Object.keys(data);
       for (var k = 0; k < incomingKeys.length; k++) {
         var key = incomingKeys[k];
+        // Sohbet transkript metinlerini ana tabloya ekleyip tabloyu devasa boyutlara ulaştırmayalım
+        if (key === "d1_chat_transcript" || key === "d2_chat_transcript") continue;
         if (headers.indexOf(key) === -1) {
           headers.push(key);
           headersUpdated = true;
@@ -106,7 +122,6 @@ function doPost(e) {
       }
     }
     
-    // Satırı başlıklara göre doldur
     var row = [];
     for (var i = 0; i < headers.length; i++) {
       var hKey = headers[i];
@@ -121,9 +136,49 @@ function doPost(e) {
         row.push("");
       }
     }
-    
     sheet.appendRow(row);
-    return jsonResponse({ result: "success", message: "Veri başarıyla kaydedildi." });
+    
+    // 2. SOHBET KAYITLARINI AYRI SEKMEDE KAYDET (Sohbet_Kayitlari Sekmesi)
+    var chatSheet = ss.getSheetByName("Sohbet_Kayitlari");
+    if (!chatSheet) {
+      chatSheet = ss.insertSheet("Sohbet_Kayitlari");
+      chatSheet.appendRow(CHAT_HEADERS);
+      chatSheet.getRange(1, 1, 1, CHAT_HEADERS.length).setFontWeight("bold").setBackground("#d1e7dd");
+    }
+    
+    // İkilem 1 Sohbet Kaydı Varsa Ekle
+    if (data.d1_chat_transcript && String(data.d1_chat_transcript).trim() !== "") {
+      chatSheet.appendRow([
+        data.timestamp || new Date().toISOString(),
+        data.muhatap || "",
+        data.siralama || "",
+        "İkilem 1 (Yemek)",
+        data.d1_assigned_model || "",
+        data.d1_initial_choice || "",
+        data.d1_final_choice || "",
+        data.d1_q3_ai_influence || "",
+        data.d1_summary || "",
+        data.d1_chat_transcript
+      ]);
+    }
+    
+    // İkilem 2 Sohbet Kaydı Varsa Ekle
+    if (data.d2_chat_transcript && String(data.d2_chat_transcript).trim() !== "") {
+      chatSheet.appendRow([
+        data.timestamp || new Date().toISOString(),
+        data.muhatap || "",
+        data.siralama || "",
+        "İkilem 2 (Hediye Kartı)",
+        data.d2_assigned_model || "",
+        data.d2_initial_choice || "",
+        data.d2_final_choice || "",
+        data.d2_q3_ai_influence || "",
+        data.d2_summary || "",
+        data.d2_chat_transcript
+      ]);
+    }
+    
+    return jsonResponse({ result: "success", message: "Veri ve sohbet kayıtları başarıyla işlendi." });
     
   } catch (error) {
     return jsonResponse({ result: "error", message: error.toString() });
@@ -138,11 +193,6 @@ function doOptions(e) {
     .setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-/**
- * Bu fonksiyonu Apps Script editöründe yukarıdan seçip "Çalıştır" (Run) butonuna basarak 
- * istediğiniz zaman çalıştırabilirsiniz.
- * Temiz bir "Yanitlar" sayfası ve detaylı bir "Kod_Kitabi" (Codebook) sayfası oluşturur.
- */
 function createSurveyCodebookAndSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -155,8 +205,18 @@ function createSurveyCodebookAndSheet() {
     sheet.appendRow(SURVEY_HEADERS);
     sheet.getRange(1, 1, 1, SURVEY_HEADERS.length).setFontWeight("bold").setBackground("#e8f0fe");
   }
+
+  // 2. Sohbet Kayıtları Sayfası
+  var chatSheet = ss.getSheetByName("Sohbet_Kayitlari");
+  if (!chatSheet) {
+    chatSheet = ss.insertSheet("Sohbet_Kayitlari");
+  }
+  if (chatSheet.getLastRow() === 0) {
+    chatSheet.appendRow(CHAT_HEADERS);
+    chatSheet.getRange(1, 1, 1, CHAT_HEADERS.length).setFontWeight("bold").setBackground("#d1e7dd");
+  }
   
-  // 2. Kod Kitabı Sayfası
+  // 3. Kod Kitabı Sayfası
   var cbSheet = ss.getSheetByName("Kod_Kitabi");
   if (!cbSheet) {
     cbSheet = ss.insertSheet("Kod_Kitabi");
